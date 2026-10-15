@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -45,7 +46,8 @@ Overview:
       $ export GOATCOUNTER_API_KEY=[..]
       $ goatcounter proxy -site=https://stats.example.com
 
-  All pageviews are forwarded to the single site the API key belongs to.
+  All pageviews are forwarded to the single site the API key belongs to. If
+  -campaign is set, it is recorded as the campaign of each pageview.
 
   Pageviews are not forwarded immediately, but collected and sent in batches.
   A batch is flushed when any of these happens, whichever comes first:
@@ -78,6 +80,9 @@ Flags:
                listen" for detailed documentation.
 
   -site        Site to forward to, as an URL (e.g. "https://stats.example.com")
+
+  -campaign    Campaign to record for each pageview, replacing any campaign
+               set in the query parameters.
 
   -batch       Maximum number of pageviews to send in one batch; capped at 500,
                which is the maximum the API accepts. Default: 100.
@@ -113,6 +118,7 @@ func cmdProxy(f zli.Flags, ready chan<- struct{}, stop chan struct{}) error {
 		jsonFlag  = f.Bool(false, "json")
 		listen    = f.String(":8080", "listen")
 		siteFlag  = f.String("", "site")
+		campaign  = f.String("", "campaign")
 		batch     = f.Int(100, "batch")
 		queue     = f.Int(100_000, "queue")
 		batchMin  = f.String("1s", "batch-min-time")
@@ -171,6 +177,7 @@ func cmdProxy(f zli.Flags, ready chan<- struct{}, stop chan struct{}) error {
 	p := &proxy{
 		url:      site,
 		key:      key,
+		campaign: campaign.String(),
 		maxBatch: batch.Int(),
 		minWait:  minWait,
 		maxWait:  maxWait,
@@ -273,6 +280,7 @@ func proxyRatelimit(spec string) (limiter.Store, error) {
 //     retried can't overtake the next one.
 type proxy struct {
 	url, key string
+	campaign string
 	maxBatch int
 	minWait  time.Duration
 	maxWait  time.Duration
@@ -447,6 +455,10 @@ func (p *proxy) count(w http.ResponseWriter, r *http.Request) error {
 		return zhttp.Bytes(w, gif)
 	}
 
+	if !hit.Event && p.campaign != "" {
+		hit.Query = setCampaign(hit.Query, p.campaign)
+	}
+
 	a := handlers.APICountRequestHit{
 		Path:      hit.Path,
 		Title:     hit.Title,
@@ -469,6 +481,15 @@ func (p *proxy) count(w http.ResponseWriter, r *http.Request) error {
 	// another goroutine to copy a value, never for the upstream server.
 	p.in <- a
 	return zhttp.Bytes(w, gif)
+}
+
+// setCampaign returns the query string with the campaign set, replacing any
+// existing campaign.
+func setCampaign(query, campaign string) string {
+	q, _ := url.ParseQuery(strings.TrimPrefix(query, "?"))
+	q.Del("campaign")
+	q.Set("utm_campaign", campaign)
+	return "?" + q.Encode()
 }
 
 // How long to keep retrying after the HTTP server has stopped, before giving

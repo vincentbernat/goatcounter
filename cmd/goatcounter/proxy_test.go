@@ -143,6 +143,7 @@ func TestProxy(t *testing.T) {
 	const listen = "localhost:9923"
 	shutdown := startProxy(t, listen,
 		"-site="+up.URL,
+		"-campaign=edge1",
 		"-ratelimit=off",
 		"-batch-min-time=50ms",
 		"-batch-max-time=500ms")
@@ -181,6 +182,28 @@ func TestProxy(t *testing.T) {
 		if h.CreatedAt.IsZero() {
 			t.Errorf("pageview %d: CreatedAt is zero", i)
 		}
+		if want := "?utm_campaign=edge1"; h.Query != want {
+			t.Errorf("pageview %d: Query = %q, want %q", i, h.Query, want)
+		}
+	}
+}
+
+func TestSetCampaign(t *testing.T) {
+	tests := []struct {
+		query, campaign, want string
+	}{
+		{"", "example.com", "?utm_campaign=example.com"},
+		{"?a=b", "example.com", "?a=b&utm_campaign=example.com"},
+		{"a=b", "example.com", "?a=b&utm_campaign=example.com"},
+		{"?utm_campaign=x&utm_source=y", "example.com", "?utm_campaign=example.com&utm_source=y"},
+		{"?campaign=x", "example.com", "?utm_campaign=example.com"},
+	}
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			if got := setCampaign(tt.query, tt.campaign); got != tt.want {
+				t.Errorf("setCampaign(%q, %q) = %q, want %q", tt.query, tt.campaign, got, tt.want)
+			}
+		})
 	}
 }
 
